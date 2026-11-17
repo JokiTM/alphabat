@@ -1,5 +1,7 @@
 # Alphabat
 
+Fork of [csmith](https://github.com/csmith/alphabat) which has been archived.
+
 Alphabat is a simple command line tool to retrieve the battery status of a
 HyperX Cloud Alpha Wireless headset. (This also has the side effect of making
 the headset report the correct battery level when pressing the power button.)
@@ -36,3 +38,13 @@ If something goes wrong, alphabat will exit with the following status codes:
 | 4         | Unable to read data     | ?                            |
 | 5         | HID library unavailable | Compiled without cgo enabled |
 | 125       | No response from device | Headset not turned on        |
+
+## Licence
+alphabat – Battery status for HyperX Cloud Alpha Wireless headsets
+Copyright (C) 2026  JokiTM
+Copyright (C) 2022 Chris Smith (MIT, see NOTICE)
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
