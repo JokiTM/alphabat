@@ -2,75 +2,119 @@ package main
 
 import (
 	"errors"
+	"flag"
+	"fmt"
 	"os"
+	"strconv"
 	"time"
-
-	"github.com/bearsh/hid"
 )
 
-const (
-	vendorId  = 0x03f0
-	productId = 0x098d
+// usageError marks errors caused by invalid user input.
+// main prints the usage text for them and exits with code 2.
+type usageError string
 
-	packetPrefix1   = 0x21
-	packetPrefix2   = 0xBB
-	deviceInfoQuery = 0x0B
+func (e usageError) Error() string { return string(e) }
 
-	timeout = time.Millisecond * 500
-)
+func usage() {
+	out := flag.CommandLine.Output()
+	fmt.Fprintf(out, `Usage: %s [command] [argument]
+
+Commands:
+  (none)             print battery level in percent
+  sleep              print current sleep timer
+  sleep <minutes>    set sleep timer (0-255, e.g. 10, 20, 30)
+  voice              print whether voice prompts are enabled
+  voice on|off       enable or disable voice prompts
+`, os.Args[0])
+	flag.PrintDefaults()
+}
 
 func main() {
-	if !hid.Supported() {
-		os.Exit(5)
-	}
+	flag.Usage = usage
+	flag.Parse()
 
-	device := findDevice()
-	if device == nil {
+	if err := run(flag.Args()); err != nil {
+		var ue usageError
+		if errors.As(err, &ue) {
+			fmt.Fprintf(os.Stderr, "%v\n\n", err)
+			flag.Usage()
+			os.Exit(2)
+		}
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
+}
 
-	d, err := device.Open()
+// run executes the given command. Returning instead of calling os.Exit
+// ensures that deferred cleanup (closing the device) always runs.
+func run(args []string) error {
+	h, err := Open()
 	if err != nil {
-		os.Exit(2)
+		return fmt.Errorf("initializing device: %w", err)
 	}
-	defer d.Close()
+	defer h.Close()
 
-	go read(d)
-
-	if _, err := d.Write([]byte{packetPrefix1, packetPrefix2, deviceInfoQuery}); err != nil {
-		os.Exit(3)
+	if len(args) == 0 {
+		level, err := h.Query(BatteryLevel)
+		if err != nil {
+			return err
+		}
+		fmt.Println(level)
+		return nil
 	}
 
-	time.Sleep(timeout)
-	d.Close()
-	os.Exit(125)
-}
+	hasArg := len(args) > 1
 
-// findDevice returns the first matching headset, or nil.
-func findDevice() *hid.DeviceInfo {
-	devices := hid.Enumerate(vendorId, productId)
-	if len(devices) > 0 {
-		return &devices[0]
-	}
-	return nil
-}
-
-// read reads packets from the device until the device is closed, or until it receives
-// the battery percentage in a deviceInfoQuery response.
-func read(d *hid.Device) {
-	var r = make([]byte, 10)
-	for {
-		if _, err := d.Read(r); err != nil {
-			if errors.Is(err, hid.ErrDeviceClosed) {
-				os.Exit(125)
+	switch args[0] {
+	case "sleep":
+		if !hasArg {
+			state, err := h.Query(SleepState)
+			if err != nil {
+				return err
 			}
-
-			os.Exit(4)
+			fmt.Println(state)
+			return nil
 		}
-
-		if r[2] == deviceInfoQuery {
-			println(int(r[3]))
-			os.Exit(0)
+		min, err := strconv.ParseUint(args[1], 10, 8) // base 10, max. 8 bit
+		if err != nil {
+			return usageError(fmt.Sprintf("Invalid sleep time %q", args[1]))
 		}
+		if _, err := h.Set(0x21bb1200 | Command(min)); err != nil { // 20 → 0x14
+			return err
+		}
+	case "voice":
+		if !hasArg {
+			state, err := h.Query(VoiceState)
+			if err != nil {
+				return err
+			}
+			switch state {
+			case 1:
+				fmt.Println("voice prompts enabled")
+			case 0:
+				fmt.Println("voice prompts disabled")
+			default:
+				fmt.Println("unknown voice prompt state:", state)
+			}
+			return nil
+		}
+		var cmd Command
+		switch args[1] {
+		case "on":
+			cmd = VoicePromptsOn
+		case "off":
+			cmd = VoicePromptsOff
+		default:
+			return usageError(fmt.Sprintf("Invalid voice option %q, expected \"on\" or \"off\"", args[1]))
+		}
+		if _, err := h.Set(cmd); err != nil {
+			return err
+		}
+	default:
+		return usageError(fmt.Sprintf("Invalid command %q", args[0]))
 	}
+
+	// Give the headset time to apply the setting before the device is closed.
+	time.Sleep(timeout)
+	return nil
 }
